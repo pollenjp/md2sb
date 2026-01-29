@@ -1,2 +1,6 @@
 [tools]
 node = "25.5.0"
+
+[tasks.build]
+dir = "md2sb"
+run = "npm run build"

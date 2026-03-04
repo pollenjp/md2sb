@@ -1,5 +1,7 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  base: '/md2sb/'
+  base: '/md2sb/',
+  test: {},
 })

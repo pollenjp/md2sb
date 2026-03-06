@@ -79,6 +79,7 @@ export function convertToScrapbox(text: string): string {
       // Output the code:txt block for the header title with ORIGINAL content
       result.push(` code:txt`);
       result.push(`  ${rawContent}`);
+      result.push(` -`);
       continue;
     }
 

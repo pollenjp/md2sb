@@ -40,7 +40,9 @@ export function convertToScrapbox(text: string): string {
       if (!inCodeBlock) {
         inCodeBlock = true;
         const lang = line.trim().slice(3).trim();
-        result.push(`code:${lang || 'snippet'}`);
+        result.push(
+          `${contentBaseIndentString}code:${lang || 'snippet'}`,
+        );
       } else {
         inCodeBlock = false;
       }
@@ -48,7 +50,9 @@ export function convertToScrapbox(text: string): string {
     }
 
     if (inCodeBlock) {
-      result.push(' ' + line); // Indent code content with one space
+      if (line.trim() !== '') {
+        result.push(`${contentBaseIndentString} ${line}`);
+      }
       continue;
     }
 
@@ -159,25 +163,44 @@ export function convertToScrapbox(text: string): string {
 }
 
 export function parseInline(text: string): string {
-  let res = text;
+  // Split text into code spans and non-code segments
+  // Inline code: `...` should be preserved as-is
+  const parts = text.split(/(`[^`]+`)/);
 
-  // Images: ![alt](url) -> [url]
-  res = res.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[$2]');
+  const processed = parts.map((part) => {
+    // If this part is an inline code span, preserve it
+    // Add trailing space before closing backtick if content ends with *
+    // to prevent Scrapbox from interpreting it as formatting
+    if (part.startsWith('`') && part.endsWith('`')) {
+      const inner = part.slice(1, -1);
+      if (inner.endsWith('*')) {
+        return `\`${inner} \``;
+      }
+      return part;
+    }
 
-  // Links: [text](url) -> [url text]
-  res = res.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$2 $1]');
+    let res = part;
 
-  // Bold: **text** -> [* text]
-  res = res.replace(/\*\*([^*]+)\*\*/g, '[* $1]');
+    // Images: ![alt](url) -> [url]
+    res = res.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[$2]');
 
-  // Italic: *text* -> [/ text]
-  // Negative lookbehind prevents matching [* from bold notation
-  res = res.replace(/(?<!\[)\*([^*]+)\*/g, '[/ $1]');
+    // Links: [text](url) -> [url text]
+    res = res.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$2 $1]');
 
-  // Strike: ~~text~~ -> [- text]
-  res = res.replace(/~~([^~]+)~~/g, '[- $1]');
+    // Bold: **text** -> [* text]
+    res = res.replace(/\*\*([^*]+)\*\*/g, '[* $1]');
 
-  return res;
+    // Italic: *text* -> [/ text]
+    // Negative lookbehind prevents matching [* from bold notation
+    res = res.replace(/(?<!\[)\*([^*]+)\*/g, '[/ $1]');
+
+    // Strike: ~~text~~ -> [- text]
+    res = res.replace(/~~([^~]+)~~/g, '[- $1]');
+
+    return res;
+  });
+
+  return processed.join('');
 }
 
 function stripInlineFormatting(text: string): string {

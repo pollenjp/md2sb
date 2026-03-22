@@ -52,6 +52,13 @@ export function convertToScrapbox(text: string): string {
     if (inCodeBlock) {
       if (line.trim() !== '') {
         result.push(`${contentBaseIndentString} ${line}`);
+      } else {
+        // Preserve empty lines within code blocks, but skip trailing
+        // empty lines before the closing fence
+        const nextNonEmpty = lines.slice(i + 1).find((l) => l.trim() !== '');
+        if (nextNonEmpty && !nextNonEmpty.trim().startsWith('```')) {
+          result.push(`${contentBaseIndentString} `);
+        }
       }
       continue;
     }
@@ -72,8 +79,11 @@ export function convertToScrapbox(text: string): string {
     if (headerMatch) {
       const rawContent = headerMatch[2]; // Original content for code block
 
-      // For display: parse inline styles, then remove backticks and brackets
-      const displayContent = parseInline(rawContent).replace(/[`\[\]]/g, '');
+      // For display: strip inline formatting, then remove backticks and brackets
+      const displayContent = stripInlineFormatting(rawContent).replace(
+        /[`\[\]]/g,
+        '',
+      );
 
       // All headers use indent level 0
       currentSectionBaseIndentLevel = 0;
@@ -163,41 +173,52 @@ export function convertToScrapbox(text: string): string {
 }
 
 export function parseInline(text: string): string {
-  // Split text into code spans and non-code segments
-  // Inline code: `...` should be preserved as-is
-  const parts = text.split(/(`[^`]+`)/);
+  let res = text;
+
+  // Process bold on full text BEFORE code span splitting,
+  // so bold that spans across code spans is handled correctly.
+
+  // Step 1: Convert standard bold (no * inside content) to Scrapbox bold
+  res = res.replace(/\*\*([^*]+)\*\*/g, '[* $1]');
+
+  // Step 2: Unwrap [* ...] that starts with a code span (e.g. [* `code` text])
+  // These are definition-style bolds where stripping is more appropriate
+  res = res.replace(/\[\*\s+(`[^`]+`[^[\]]*)\]/g, '$1');
+
+  // Step 3: Strip remaining bold that contains * (couldn't match step 1)
+  res = res.replace(/\*\*((?:[^*]|\*(?!\*))+)\*\*/g, '$1');
+
+  // Now split by code spans for remaining inline processing
+  const parts = res.split(/(`[^`]+`)/);
 
   const processed = parts.map((part) => {
-    // If this part is an inline code span, preserve it
-    // Add trailing space before closing backtick if content ends with *
-    // to prevent Scrapbox from interpreting it as formatting
     if (part.startsWith('`') && part.endsWith('`')) {
       const inner = part.slice(1, -1);
-      if (inner.endsWith('*')) {
-        return `\`${inner} \``;
+      // Escape [* inside code spans to prevent Scrapbox bold interpretation
+      const escaped = inner.replace(/\[\*/g, '[]');
+      // Add trailing space if content ends with * (but not for single-char *)
+      if (escaped.endsWith('*') && escaped.length > 1) {
+        return `\`${escaped} \``;
       }
-      return part;
+      return `\`${escaped}\``;
     }
 
-    let res = part;
+    let r = part;
 
     // Images: ![alt](url) -> [url]
-    res = res.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[$2]');
+    r = r.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[$2]');
 
     // Links: [text](url) -> [url text]
-    res = res.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$2 $1]');
-
-    // Bold: **text** -> [* text]
-    res = res.replace(/\*\*([^*]+)\*\*/g, '[* $1]');
+    r = r.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$2 $1]');
 
     // Italic: *text* -> [/ text]
     // Negative lookbehind prevents matching [* from bold notation
-    res = res.replace(/(?<!\[)\*([^*]+)\*/g, '[/ $1]');
+    r = r.replace(/(?<!\[)\*([^*]+)\*/g, '[/ $1]');
 
     // Strike: ~~text~~ -> [- text]
-    res = res.replace(/~~([^~]+)~~/g, '[- $1]');
+    r = r.replace(/~~([^~]+)~~/g, '[- $1]');
 
-    return res;
+    return r;
   });
 
   return processed.join('');

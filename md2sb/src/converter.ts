@@ -22,6 +22,8 @@ export function convertToScrapbox(text: string): string {
   const result: string[] = [];
   let inCodeBlock = false;
   let inTable = false;
+  let codeBlockIndentString = '';
+  let codeBlockFencePrefix = '';
 
   // -1 means no header encountered yet (no indentation for content)
   let currentSectionBaseIndentLevel = -1;
@@ -39,9 +41,14 @@ export function convertToScrapbox(text: string): string {
     if (line.trim().startsWith('```')) {
       if (!inCodeBlock) {
         inCodeBlock = true;
+        const fencePrefix = line.match(/^(\s*)/)![1];
+        const extraLevel = Math.floor(fencePrefix.length / 2);
+        codeBlockFencePrefix = fencePrefix;
+        codeBlockIndentString =
+          contentBaseIndentString + ' '.repeat(extraLevel);
         const lang = line.trim().slice(3).trim();
         result.push(
-          `${contentBaseIndentString}code:${lang || 'snippet'}`,
+          `${codeBlockIndentString}code:${lang || 'snippet'}`,
         );
       } else {
         inCodeBlock = false;
@@ -51,13 +58,16 @@ export function convertToScrapbox(text: string): string {
 
     if (inCodeBlock) {
       if (line.trim() !== '') {
-        result.push(`${contentBaseIndentString} ${line}`);
+        const stripped = line.startsWith(codeBlockFencePrefix)
+          ? line.slice(codeBlockFencePrefix.length)
+          : line;
+        result.push(`${codeBlockIndentString} ${stripped}`);
       } else {
         // Preserve empty lines within code blocks, but skip trailing
         // empty lines before the closing fence
         const nextNonEmpty = lines.slice(i + 1).find((l) => l.trim() !== '');
         if (nextNonEmpty && !nextNonEmpty.trim().startsWith('```')) {
-          result.push(`${contentBaseIndentString} `);
+          result.push(`${codeBlockIndentString} `);
         }
       }
       continue;
@@ -117,6 +127,19 @@ export function convertToScrapbox(text: string): string {
       const markdownListDepth = Math.floor(indentation.length / 2);
       const totalIndent =
         Math.max(0, currentSectionBaseIndentLevel + 1) + markdownListDepth;
+
+      // When the entire item content is a single bold expression, treat it
+      // as a title-style entry: keep the [* ] wrapping and strip inline code
+      // backticks so the title reads cleanly.
+      const boldOnly = content.match(/^\*\*([^*]+)\*\*\s*$/);
+      if (boldOnly) {
+        const inner = boldOnly[1].replace(/`/g, '');
+        result.push(
+          `${' '.repeat(totalIndent)}1. [* ${parseInline(inner)}]`,
+        );
+        continue;
+      }
+
       result.push(
         `${' '.repeat(totalIndent)}${parseInline('1. ' + content)}`,
       );

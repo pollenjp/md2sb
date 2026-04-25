@@ -1,0 +1,20 @@
+Conventional Commits の仕様自体には WIP を表す公式な type はありません。ただ、実務ではいくつかの運用パターンがあります。
+[* よく使われる方法]
+1. [* 独自 type として wip: を使う]
+ code:snippet
+  wip: implement user auth
+ 仕様上、type は `feat` / `fix` 以外なら自由に拡張できるので規約違反ではありません。ただし `commitlint` などでデフォルトの type allowlist に入っていないので、設定を緩める必要があります。
+1. [* chore や本来の type + 説明に WIP を含める]
+ code:snippet
+  feat(auth): WIP - add login flow
+1. [* Git 標準の fixup! / squash! を使う]
+ code:snippet
+  git commit --fixup=<commit>
+ 後で `git rebase -i --autosquash` で自動的に潰せるので、「作業中の一時コミット」として非常に相性が良いです。
+[* 推奨される運用]
+Conventional Commits は基本的に「マージ後に残るコミット履歴」を綺麗にするための規約なので、多くのチームでは:
+WIP コミットは [* feature ブランチ上だけ] で使う
+PR マージ時に [* squash merge] して、最終的に Conventional Commits 準拠の 1 コミットにまとめる
+あるいは push 前に `git rebase -i` で整形する
+GitHub なら "Draft PR" 機能で WIP 状態を示せるので、コミットメッセージで頑張るよりそちらの方がスマートです。
+チームの運用方針として、どのレイヤー(ローカル・PR・main)で規約を強制したいかによって選び方が変わりますが、「WIP はローカルの自由、main は厳格」というのが一番実用的だと思います。

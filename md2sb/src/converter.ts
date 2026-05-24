@@ -134,18 +134,6 @@ export function convertToScrapbox(text: string): string {
       const markdownListDepth = Math.floor(indentation.length / 2);
       const totalIndent = sectionDepth + markdownListDepth;
 
-      // When the entire item content is a single bold expression, treat it
-      // as a title-style entry: keep the [* ] wrapping and strip inline code
-      // backticks so the title reads cleanly.
-      const boldOnly = content.match(/^\*\*([^*]+)\*\*\s*$/);
-      if (boldOnly) {
-        const inner = boldOnly[1].replace(/`/g, '');
-        result.push(
-          `${' '.repeat(totalIndent)}1. [* ${parseInline(inner)}]`,
-        );
-        continue;
-      }
-
       result.push(
         `${' '.repeat(totalIndent)}${parseInline('1. ' + content)}`,
       );

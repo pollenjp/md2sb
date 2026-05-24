@@ -1,75 +1,75 @@
-# 2026-05-24 — Converter conversion rules for Markdown → Scrapbox
+# 2026-05-24 — Converter の Markdown → Scrapbox 変換ルール
 
-- Status: Accepted
-- Date: 2026-05-24T17:17:15+09:00
-- Scope: `md2sb/src/converter.ts`, `md2sb/src/testdata/**`
+- ステータス: Accepted
+- 日付: 2026-05-24T17:17:15+09:00
+- 範囲: `md2sb/src/converter.ts`, `md2sb/src/testdata/**`
 
-## Context
+## 背景
 
-`md2sb` converts Markdown to a Scrapbox-flavored text style preferred by the author. The README sketches a few rules ("section は一律で `[** ]`、レベルはリストの階層で分ける" / "section 名に backquote や `[]` が含まれている場合は取り除く - すぐ下に text code block でオリジナルのセクション名を記載する" / "`---` (仕切り線) は無視して良い") but several edge cases were not pinned down:
+`md2sb` は Markdown を作者の好みの Scrapbox スタイルに変換するツール。README には基本ルールが書かれている (「section は一律で `[** ]`、レベルはリストの階層で分ける」 / 「section 名に backquote や `[]` が含まれている場合は取り除く - すぐ下に text code block でオリジナルのセクション名を記載する」 / 「`---` (仕切り線) は無視して良い」) が、以下のエッジケースは未定義だった:
 
-1. How to encode heading depth differences (e.g. `### + ####`, or `## + ###`) when every section collapses to `[** ]`.
-2. Whether the `code:txt` echo of the original heading title is unconditional or only when characters had to be stripped.
-3. How to render bold (`**...**`) when the bold range contains an inline code span.
-4. What `---` means for section state when a non-heading paragraph follows it (where does the paragraph belong?).
-5. How to keep heading-level detection robust when source code blocks contain `# ...` lines (shell comments etc.).
+1. 見出しのレベル差 (`### + ####` や `## + ###`) をどう表現するか。すべて `[** ]` に潰すなら段差はどこに出すか。
+2. 見出し直下の「元タイトルを `code:txt` に残すブロック」は無条件で出すのか、ストリップが発生した時だけか。
+3. `**...**` の中にインラインコードスパン (`` `...` ``) が含まれる場合の扱い。
+4. `---` の後ろに見出しではなく段落が続いたとき、その段落はどのセクションに属するか。
+5. ソースコードブロック内に `# foo` のようなシェルコメントがあるとき、見出しレベル検出が誤検知しないか。
 
-This ADR captures the decisions we made while turning the GCP Logging filter cheat-sheet (`gcp_logs_filter`) into a TDD test case and aligning the existing test cases (`bash_array`, `cloud_run`, `column_spec`, `wip_commit`) with the same set of rules.
+この ADR は、GCP Logging フィルタのチートシート (`gcp_logs_filter`) を TDD 用のテストケースとして追加した際に、既存テスト (`bash_array`, `cloud_run`, `column_spec`, `wip_commit`) を同じルールセットに揃えながら確定した決定事項を記録する。
 
-## Decisions
+## 決定事項
 
-### 1. Section nesting is derived from the shallowest heading
+### 1. セクションのネストは「文書内で最も浅い見出し」基準の相対深度で表現する
 
-- For each document we scan all headings and record `minHeadingLevel` (smallest `#` count). Code fence contents are skipped to avoid sinking the baseline on shell comments.
-- Each heading is assigned `depth = max(1, level - minHeadingLevel + 1)`.
-- A heading at depth `d` is emitted with `(d - 1)` leading spaces, and its content is indented by `d` spaces. Code fences nested under the heading add one further level (`d + 1` spaces).
-- Practical outcome:
-  - `gcp_logs_filter` (`## ...` + `### ...`) — `##` at col 0, `###` at 1 space.
-  - `cloud_run` / `column_spec` / `bash_array` (`### ...` + `#### ...`) — `###` at col 0, `####` at 1 space.
-  - `wip_commit` (no `#` headings) — `sectionDepth` stays 0, behavior unchanged.
+- 文書を全体スキャンして `minHeadingLevel` (最小の `#` 数) を求める。コードフェンス内の行はスキャン対象外。
+- 各見出しの depth を `depth = max(1, level - minHeadingLevel + 1)` で算出する。
+- depth `d` の見出しは `(d - 1)` 個の空白プレフィックスを付けて出力。その配下のコンテンツは `d` スペースインデント。配下のコードフェンスはさらに一段深く (`d + 1` スペース) インデントする。
+- 結果:
+  - `gcp_logs_filter` (`##` と `###`) — `##` は col 0、`###` は 1 スペース。
+  - `cloud_run` / `column_spec` / `bash_array` (`###` と `####`) — `###` は col 0、`####` は 1 スペース。
+  - `wip_commit` (`#` 見出しなし) — `sectionDepth` は 0 のまま、挙動変化なし。
 
-### 2. The original-title `code:txt` echo is conditional
+### 2. 元タイトルの `code:txt` echo は条件付きで出す
 
-Only emit the ` code:txt\n  <raw title>\n -` block immediately after a heading when the raw title contains characters that the display form drops — currently backquote `` ` `` or square brackets `[` / `]`. Clean titles render as `[** title]` alone.
+見出し行直下の ` code:txt\n  <元タイトル>\n -` ブロックは、元タイトルが表示形に変換される際にストリップされる文字 (現状は backquote `` ` `` と角括弧 `[` / `]`) を含んでいた場合のみ出力する。クリーンなタイトル (例: `### ポイント解説`) は `[** ...]` だけで終わる。
 
-Rationale: the echo exists to preserve information that the display title cannot show. For a title like `### ポイント解説` the echo is pure duplication and clutters the output.
+理由: この echo は「表示用タイトルに表現しきれない情報を残す」ためのものなので、何もストリップされていない場合は単なる重複でノイズになる。
 
-### 3. Bold containing a code span is unwrapped (code span wins)
+### 3. コードスパンを含む bold は wrapping を外す (コードスパン優先)
 
-If `**...**` content contains an inline code span (`` `...` ``), the surrounding bold markers are dropped and the inner text is emitted plain (with code spans preserved). This is implemented by extending the existing "starts-with-code-span" unwrap rule to "code span anywhere inside the `[* ...]` range" in `parseInline`.
+`**...**` の中身に `` `...` `` が含まれる場合は、bold マーカーを取り除き、中身をそのまま (コードスパンは保持) 出力する。`parseInline` の既存の「先頭がコードスパンなら unwrap」ルールを「中身のどこかにコードスパンがあれば unwrap」へ拡張して実装する。
 
-Rationale: Scrapbox does not apply bold across a code span anyway, so wrapping with `[* ... ]` is misleading and visually noisy. Prefer the code span.
+理由: Scrapbox はコードスパンをまたいで bold を効かせないので、`[* ... ]` で包んでも見た目が変わらないどころかノイズになる。コードスパン側を優先する。
 
-Exception (kept from existing behavior): for an ordered-list item whose **entire** content is a single bold expression (`1. **foo `bar` baz**`), the bold is treated as a title-style entry. We keep the `[* ... ]` wrapping and strip the inner backquotes so the title reads cleanly. This is the wip_commit pattern.
+例外 (既存挙動を維持): 順序付きリストアイテムの中身が単一の bold だけの場合 (例: `1. **foo `bar` baz**`)、これはタイトル相当の見出し的記述と見なし、`[* ... ]` で包みつつ内部の backquote を落として出力する。これは `wip_commit` パターン。
 
-### 4. `---` resets the section depth
+### 4. `---` はセクション深度をリセットする
 
-A horizontal-rule line (`---` / `***` / `___`) is dropped from the output (per the README), and additionally resets `sectionDepth` to 0. Any non-heading paragraph that follows therefore renders at the document top level.
+水平線 (`---` / `***` / `___`) は出力から除外する (README 通り) のに加え、出現時点で `sectionDepth = 0` に戻す。続く非見出し段落は文書のトップレベルにレンダリングされる。
 
-Rationale: a `---` followed by a closing paragraph is the author's signal that the paragraph belongs to the whole document, not to the most recent heading. Resetting on `---` makes that intent explicit and is symmetric with the README's "仕切り" wording. When `---` is followed by another heading, the heading re-establishes the new depth, so existing behavior is preserved.
+理由: `---` の後ろに closing paragraph が来るのは「直前のセクションではなく文書全体に対する締めの記述」というシグナル。リセットにすることでその意図が出力にも反映される。`---` の後に別の見出しが続く場合は、その見出しが新しい depth を立て直すので既存テストへの影響はない。
 
-Side effect: `bash_array`'s closing question paragraph, which previously rendered at one-space indent inside the last section, is now at column 0. The test data was updated accordingly.
+副作用: `bash_array` の最後の問いかけ段落は従来 1 スペースインデント (最終セクション内扱い) だったが、今後は col 0 で出力される。テストデータも合わせて更新済み。
 
-### 5. Heading-level scan skips fenced code blocks
+### 5. 見出しレベルのスキャンはコードフェンスを無視する
 
-The `minHeadingLevel` pre-scan tracks an in-fence flag and ignores `#`-prefixed lines inside fenced code blocks. Without this, a bash code block containing a comment like `# サンプル配列…` would set `minHeadingLevel = 1`, sinking every real `###` heading two levels deeper than intended.
+`minHeadingLevel` の事前スキャンで in-fence フラグを持ち、フェンス内の `#` 始まりの行はスキップする。これを入れないと、bash コードブロック内の `# サンプル配列…` のようなコメントが `minHeadingLevel = 1` を立ててしまい、実際の `###` 見出しが深く沈み込んでしまう。
 
-## Consequences
+## 影響
 
-- All five test cases now pass under the unified rule set.
-- `bash_array/out.txt` was updated in three places:
-  - Two inline `[* ... `code` ...]` ranges in paragraph text are now emitted without the bold wrapping.
-  - The closing question paragraph is at column 0 (consequence of decision #4).
-- `cloud_run/out.txt`, `column_spec/out.txt`, and `gcp_logs_filter/out.txt` were updated to apply decisions #1 and #2 (nesting + conditional echo).
-- The conversion is now more sensitive to the *shape* of the document (relative heading depths, code-block-aware heading scan). Authors writing markdown for this tool should be aware that the shallowest heading defines the document's top level.
+- 既存 5 ケースすべてのテストが新ルールセットでパス。
+- `bash_array/out.txt` は 3 箇所を更新:
+  - 段落中の `[* ... `code` ...]` 2 箇所が bold wrapping を外した形になる。
+  - 末尾の問いかけ段落が col 0 に移動 (決定 4 の帰結)。
+- `cloud_run/out.txt`, `column_spec/out.txt`, `gcp_logs_filter/out.txt` は決定 1 と 2 を反映する形で更新。
+- 出力が文書全体の「形」(最浅レベル基準の相対 depth、コードフェンス考慮の見出しスキャン) に依存するようになった。寄稿者は、最も浅い見出しが文書のトップを定めるという点を意識する必要がある。
 
-## Alternatives considered
+## 検討した代替案
 
-- **Bold-with-code: only strip when code span is at the start.** Rejected because gcp_logs_filter item 2 has a mid-line code span and the author confirmed it should also be unwrapped. The rule needed to be uniform.
-- **`---` does not reset section depth.** Rejected because the gcp_logs_filter closing summary `**運用ヒント**:` would have rendered at 2-space indent under `### 特定 VM` — clearly not the intent.
-- **Absolute heading-level mapping (h1 → 0 indent, h2 → 1, ...).** Rejected: documents that start at `###` (very common in pasted chat replies) would render every heading two spaces deep. Relative mapping keeps the output compact.
+- **コードスパンが先頭にあるときだけ bold を外す。** 却下。`gcp_logs_filter` の 2 番目のアイテムはコードスパンが文中にあり、作者がここも外す挙動を望んだ。ルールは統一しないと意味が薄れる。
+- **`---` でセクションをリセットしない。** 却下。`gcp_logs_filter` の `**運用ヒント**:` が `### 特定 VM` 配下の 2 スペースインデントになってしまい、文書の意図と乖離する。
+- **見出しレベルを絶対値でマッピング (h1 → 0, h2 → 1, …)。** 却下。チャット返答などで `###` 始まりの Markdown が貼られる典型ケースで、全見出しが 2 スペース沈み込む。相対マッピングの方が出力が締まる。
 
-## Follow-ups
+## フォローアップ
 
-- The README's wording ("section は一律で `[** ]`、レベルはリストの階層で分ける") still does not explicitly mention the conditional echo, the bold-over-code rule, or the `---` reset. Consider folding the decisions into the README so future contributors don't rediscover them via tests.
-- The test harness compares full strings; trailing whitespace inside code blocks (e.g. the `  ` blank line representation) is significant. If we ever auto-format the test fixtures we'll need a rule that preserves these.
+- README の文言は依然として上記の「条件付き echo」「bold-over-code」「`---` リセット」を明示していない。テストから再発見せずに済むよう、ルールを README に取り込むことを検討する。
+- テストハーネスは完全一致比較なので、コードブロック内の空行 (2 スペースだけの行など) のトレーリングスペースが意味を持つ。今後テストフィクスチャを自動整形する仕組みを入れる場合は、この保持規則を明示する必要がある。

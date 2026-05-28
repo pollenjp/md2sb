@@ -1,22 +1,22 @@
 export function convertToScrapbox(text: string): string {
-  const rawLines = text.split('\n');
-  const lines: string[] = [];
+  const lines = text.split('\n');
 
-  // Preprocess to remove separators and surrounding empty lines
-  for (let i = 0; i < rawLines.length; i++) {
-    const l = rawLines[i];
-    if (l.trim() === '---' || l.trim() === '***' || l.trim() === '___') {
-      // Remove preceding empty line
-      if (lines.length > 0 && lines[lines.length - 1].trim() === '') {
-        lines.pop();
+  // Determine the shallowest heading level so nesting can be expressed
+  // relative to it (per README: section headings collapse to [** ...] and
+  // level differences are encoded as list-style indentation). Skip lines
+  // inside fenced code blocks so that shell comments etc. don't pollute it.
+  let minHeadingLevel = Infinity;
+  {
+    let inFence = false;
+    for (const l of lines) {
+      if (l.trim().startsWith('```')) {
+        inFence = !inFence;
+        continue;
       }
-      // Skip next empty line
-      if (i + 1 < rawLines.length && rawLines[i + 1].trim() === '') {
-        i++;
-      }
-      continue;
+      if (inFence) continue;
+      const m = l.match(/^(#+)\s/);
+      if (m) minHeadingLevel = Math.min(minHeadingLevel, m[1].length);
     }
-    lines.push(l);
   }
 
   const result: string[] = [];
@@ -25,17 +25,14 @@ export function convertToScrapbox(text: string): string {
   let codeBlockIndentString = '';
   let codeBlockFencePrefix = '';
 
-  // -1 means no header encountered yet (no indentation for content)
-  let currentSectionBaseIndentLevel = -1;
+  // 0 = outside any section; 1 = top-level section, 2 = nested, ...
+  let sectionDepth = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Calculate the base content indent string for the current section state
     const contentBaseIndentString =
-      currentSectionBaseIndentLevel >= 0
-        ? ' '.repeat(currentSectionBaseIndentLevel + 1)
-        : '';
+      sectionDepth > 0 ? ' '.repeat(sectionDepth) : '';
 
     // Code Block Handling: ```lang
     if (line.trim().startsWith('```')) {
@@ -47,9 +44,7 @@ export function convertToScrapbox(text: string): string {
         codeBlockIndentString =
           contentBaseIndentString + ' '.repeat(extraLevel);
         const lang = line.trim().slice(3).trim();
-        result.push(
-          `${codeBlockIndentString}code:${lang || 'snippet'}`,
-        );
+        result.push(`${codeBlockIndentString}code:${lang || 'snippet'}`);
       } else {
         inCodeBlock = false;
       }
@@ -63,8 +58,6 @@ export function convertToScrapbox(text: string): string {
           : line;
         result.push(`${codeBlockIndentString} ${stripped}`);
       } else {
-        // Preserve empty lines within code blocks, but skip trailing
-        // empty lines before the closing fence
         const nextNonEmpty = lines.slice(i + 1).find((l) => l.trim() !== '');
         if (nextNonEmpty && !nextNonEmpty.trim().startsWith('```')) {
           result.push(`${codeBlockIndentString} `);
@@ -73,13 +66,23 @@ export function convertToScrapbox(text: string): string {
       continue;
     }
 
-    // Empty lines - skip (Scrapbox doesn't use blank lines for separation)
     if (line.trim() === '') {
       inTable = false;
       continue;
     }
 
-    // Reset table state for non-table lines
+    // Horizontal rule: drop the line itself and reset section nesting so
+    // any trailing closing paragraph returns to the document top level.
+    if (
+      line.trim() === '---' ||
+      line.trim() === '***' ||
+      line.trim() === '___'
+    ) {
+      sectionDepth = 0;
+      inTable = false;
+      continue;
+    }
+
     if (!line.trim().startsWith('|')) {
       inTable = false;
     }
@@ -87,23 +90,28 @@ export function convertToScrapbox(text: string): string {
     // Headers
     const headerMatch = line.match(/^(#+)\s+(.*)/);
     if (headerMatch) {
-      const rawContent = headerMatch[2]; // Original content for code block
+      const level = headerMatch[1].length;
+      const rawContent = headerMatch[2];
 
-      // For display: strip inline formatting, then remove backticks and brackets
       const displayContent = stripInlineFormatting(rawContent).replace(
         /[`\[\]]/g,
         '',
       );
 
-      // All headers use indent level 0
-      currentSectionBaseIndentLevel = 0;
+      const depth = Math.max(1, level - minHeadingLevel + 1);
+      sectionDepth = depth;
 
-      // Output the header line
-      result.push(`[** ${displayContent}]`);
-      // Output the code:txt block for the header title with ORIGINAL content
-      result.push(` code:txt`);
-      result.push(`  ${rawContent}`);
-      result.push(` -`);
+      const headingIndent = ' '.repeat(depth - 1);
+
+      result.push(`${headingIndent}[** ${displayContent}]`);
+
+      // Only emit the original-title preservation block when characters had
+      // to be stripped (backquotes or square brackets) from the title.
+      if (/[`\[\]]/.test(rawContent)) {
+        result.push(`${headingIndent} code:txt`);
+        result.push(`${headingIndent}  ${rawContent}`);
+        result.push(`${headingIndent} -`);
+      }
       continue;
     }
 
@@ -113,8 +121,7 @@ export function convertToScrapbox(text: string): string {
       const indentation = listMatch[1];
       const content = listMatch[2];
       const markdownListDepth = Math.floor(indentation.length / 2);
-      const totalIndent =
-        Math.max(0, currentSectionBaseIndentLevel + 1) + markdownListDepth;
+      const totalIndent = sectionDepth + markdownListDepth;
       result.push(`${' '.repeat(totalIndent)}${parseInline(content)}`);
       continue;
     }
@@ -125,20 +132,7 @@ export function convertToScrapbox(text: string): string {
       const indentation = orderedListMatch[1];
       const content = orderedListMatch[2];
       const markdownListDepth = Math.floor(indentation.length / 2);
-      const totalIndent =
-        Math.max(0, currentSectionBaseIndentLevel + 1) + markdownListDepth;
-
-      // When the entire item content is a single bold expression, treat it
-      // as a title-style entry: keep the [* ] wrapping and strip inline code
-      // backticks so the title reads cleanly.
-      const boldOnly = content.match(/^\*\*([^*]+)\*\*\s*$/);
-      if (boldOnly) {
-        const inner = boldOnly[1].replace(/`/g, '');
-        result.push(
-          `${' '.repeat(totalIndent)}1. [* ${parseInline(inner)}]`,
-        );
-        continue;
-      }
+      const totalIndent = sectionDepth + markdownListDepth;
 
       result.push(
         `${' '.repeat(totalIndent)}${parseInline('1. ' + content)}`,
@@ -153,7 +147,7 @@ export function convertToScrapbox(text: string): string {
         const quotes = quoteMatch[1].replace(/\s/g, '');
         const content = quoteMatch[2];
         const quoteDepth = quotes.length;
-        const totalIndent = Math.max(0, currentSectionBaseIndentLevel + 1);
+        const totalIndent = sectionDepth;
         const quotePrefix = '>'.repeat(quoteDepth);
         result.push(
           `${' '.repeat(totalIndent)}${quotePrefix} ${parseInline(content)}`,
@@ -198,15 +192,12 @@ export function convertToScrapbox(text: string): string {
 export function parseInline(text: string): string {
   let res = text;
 
-  // Process bold on full text BEFORE code span splitting,
-  // so bold that spans across code spans is handled correctly.
-
   // Step 1: Convert standard bold (no * inside content) to Scrapbox bold
   res = res.replace(/\*\*([^*]+)\*\*/g, '[* $1]');
 
-  // Step 2: Unwrap [* ...] that starts with a code span (e.g. [* `code` text])
-  // These are definition-style bolds where stripping is more appropriate
-  res = res.replace(/\[\*\s+(`[^`]+`[^[\]]*)\]/g, '$1');
+  // Step 2: Drop [* ...] wrapping when the inner text contains a code span.
+  // Scrapbox doesn't bold across code spans anyway, so the code span wins.
+  res = res.replace(/\[\*\s+([^[\]]*`[^`]+`[^[\]]*)\]/g, '$1');
 
   // Step 3: Strip remaining bold that contains * (couldn't match step 1)
   res = res.replace(/\*\*((?:[^*]|\*(?!\*))+)\*\*/g, '$1');
